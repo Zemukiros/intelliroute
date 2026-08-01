@@ -11,10 +11,10 @@ export default function HomePage() {
           Route Intelligence Platform
         </h1>
         <p className="mt-3 max-w-2xl text-slate-400">
-          Shortest-path routing over a weighted road network using
-          Dijkstra&apos;s algorithm, served by a Spring Boot API with measured
-          execution time. AI-assisted route preferences arrive in a later
-          milestone.
+          Multi-route intelligence over a weighted road network: Yen&apos;s
+          k-shortest paths on a Dijkstra core, ranked against plain-language
+          preferences by a local deterministic ranking service — with measured
+          execution times throughout.
         </p>
       </header>
       <RoutePlanner />

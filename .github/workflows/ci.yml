@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feature/**"]
   pull_request:
     branches: [main]
 
 jobs:
   backend:
-    name: API — build, test & smoke test
+    name: API — build, test & live e2e
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -23,6 +23,11 @@ jobs:
           java-version: "21"
           cache: maven
 
+      - name: Set up Python 3.12 (ranking service for e2e)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Build and run tests
         run: mvn -B verify
 
@@ -32,7 +37,17 @@ jobs:
           echo "### JUnit results" >> "$GITHUB_STEP_SUMMARY"
           grep -h "Tests run" target/surefire-reports/*.txt >> "$GITHUB_STEP_SUMMARY" || true
 
-      - name: API smoke test (boot + live request)
+      - name: Start ranking service
+        working-directory: services/ai-service
+        run: |
+          pip install -q -r requirements.txt
+          nohup uvicorn app.main:app --port 8090 > /tmp/ai-service.log 2>&1 &
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8090/health > /dev/null && break; sleep 1
+          done
+          curl -sf http://localhost:8090/health
+
+      - name: Live e2e — routing + preference ranking + fallback
         run: |
           java -jar target/intelliroute-api-*.jar &
           APP_PID=$!
@@ -40,21 +55,86 @@ jobs:
             if curl -sf http://localhost:8080/actuator/health > /dev/null; then break; fi
             sleep 2
           done
-          echo "--- calculate A -> F"
-          RESPONSE=$(curl -sf -X POST http://localhost:8080/api/routes/calculate \
+
+          echo "--- shortest A -> F (Step 1 contract preserved)"
+          R=$(curl -sf -X POST http://localhost:8080/api/routes/calculate \
+            -H "Content-Type: application/json" -d '{"origin":"A","destination":"F"}')
+          echo "$R"; echo "$R" | grep -q '"totalDistance":14.0'
+
+          echo "--- alternatives A -> F (3 candidates)"
+          R=$(curl -sf -X POST http://localhost:8080/api/routes/alternatives \
+            -H "Content-Type: application/json" -d '{"origin":"A","destination":"F","maximumRoutes":3}')
+          echo "$R"; echo "$R" | grep -q '"returnedRoutes":3'
+
+          echo "--- recommend: avoid tolls -> toll-free scenic route wins"
+          R=$(curl -sf -X POST http://localhost:8080/api/routes/recommend \
             -H "Content-Type: application/json" \
-            -d '{"origin": "A", "destination": "F"}')
-          echo "$RESPONSE"
-          echo "$RESPONSE" | grep -q '"totalDistance":14.0' || (echo "Unexpected route result" && exit 1)
-          echo "--- unreachable A -> J (expect 422)"
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/api/routes/calculate \
+            -d '{"origin":"A","destination":"F","preference":"avoid tolls","maximumRoutes":3}')
+          echo "$R"
+          echo "$R" | grep -q '"provider":"local-deterministic-v1"'
+          echo "$R" | grep -q '"recommendedRouteId":"route-3"'
+          echo "$R" | grep -q '"fallbackUsed":false'
+
+          echo "--- recommend: safest -> highway route wins"
+          R=$(curl -sf -X POST http://localhost:8080/api/routes/recommend \
             -H "Content-Type: application/json" \
-            -d '{"origin": "A", "destination": "J"}')
-          test "$CODE" = "422" || (echo "Expected 422, got $CODE" && exit 1)
+            -d '{"origin":"A","destination":"F","preference":"give me the safest route"}')
+          echo "$R" | grep -q '"recommendedRouteId":"route-2"'
+
+          echo "--- unreachable destination -> 422"
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/api/routes/recommend \
+            -H "Content-Type: application/json" \
+            -d '{"origin":"A","destination":"J","preference":"fastest"}')
+          test "$CODE" = "422"
+
+          echo "--- measured e2e latency (30 recommend calls)"
+          total=0
+          for i in $(seq 1 30); do
+            t=$(curl -sf -o /dev/null -w "%{time_total}" -X POST http://localhost:8080/api/routes/recommend \
+              -H "Content-Type: application/json" \
+              -d '{"origin":"A","destination":"F","preference":"balance time, safety, and cost"}')
+            total=$(echo "$total + $t" | bc -l)
+          done
+          echo "avg end-to-end recommend latency: $(echo "scale=1; $total / 30 * 1000" | bc -l) ms" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          echo "--- stop ranking service; fallback must engage"
+          pkill -f "uvicorn app.main:app" || true
+          sleep 2
+          R=$(curl -sf -X POST http://localhost:8080/api/routes/recommend \
+            -H "Content-Type: application/json" \
+            -d '{"origin":"A","destination":"F","preference":"avoid tolls"}')
+          echo "$R"
+          echo "$R" | grep -q '"fallbackUsed":true'
+          echo "$R" | grep -q '"provider":"java-local-fallback"'
+
           kill $APP_PID
 
+  ai-service:
+    name: Ranking service — tests & benchmark
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ai-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      - name: Ranking benchmark (reproducible, seed 42)
+        run: |
+          python scripts/benchmark_ranking.py | tee -a "$GITHUB_STEP_SUMMARY"
+
   frontend:
-    name: Web — lint & build
+    name: Web — lint, test & build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -75,40 +155,41 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Component tests
+        run: npm test
+
       - name: Build
         run: npm run build
 
-  ai-service:
-    name: AI service — import & sanity check
+  docker:
+    name: Docker Compose — build & smoke
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/ai-service
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Import and provider sanity check
+      - name: Build and start the stack
         run: |
-          python - <<'EOF'
-          from app.main import app
-          from app.providers import CandidateRoute, MockRankingProvider
+          docker compose up --build -d
+          for i in $(seq 1 45); do
+            if curl -sf http://localhost:8080/actuator/health > /dev/null; then break; fi
+            sleep 2
+          done
 
-          provider = MockRankingProvider()
-          ranked = provider.rank(
-              "avoid highways",
-              [
-                  CandidateRoute(path=["A", "C", "D", "F"], total_distance_km=14),
-                  CandidateRoute(path=["A", "B", "D", "F"], total_distance_km=17),
-              ],
-          )
-          assert ranked[0].total_distance_km == 14, "shorter route must rank first"
-          print("AI service scaffold OK:", app.title)
-          EOF
+      - name: Smoke test the containerized stack
+        run: |
+          curl -sf http://localhost:8090/health | grep -q local-deterministic
+          R=$(curl -sf -X POST http://localhost:8080/api/routes/recommend \
+            -H "Content-Type: application/json" \
+            -d '{"origin":"A","destination":"F","preference":"avoid highways"}')
+          echo "$R"
+          echo "$R" | grep -q '"fallbackUsed":false'
+          echo "$R" | grep -q '"recommendedRouteId":"route-3"'
+          curl -sf http://localhost:3000 | grep -qi intelliroute
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

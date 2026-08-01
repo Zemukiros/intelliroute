@@ -9,6 +9,12 @@ intelliroute:
   cors:
     # Comma-separated list; override in production deployments.
     allowed-origins: http://localhost:3000
+  ranking:
+    # Preference-ranking service (FastAPI). When unreachable, the API
+    # degrades to a local distance-ordered fallback — it never fails.
+    base-url: http://localhost:8090
+    connect-timeout-ms: 1000
+    read-timeout-ms: 2000
 
 management:
   endpoints:

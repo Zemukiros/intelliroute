@@ -1,67 +1,58 @@
-"""Route-ranking provider interface and the cost-free mock implementation.
+"""Route-ranking providers.
 
-The provider abstraction keeps the AI service swappable: during development
-(and in CI) the deterministic ``MockRankingProvider`` is used, so no paid
-AI API is ever called. A future ``LlmRankingProvider`` will implement the
-same protocol and be selected with the ``RANKING_PROVIDER`` env variable.
+The provider abstraction keeps ranking swappable. Step 2 ships the
+**local deterministic preference-ranking provider** — keyword-based
+preference parsing plus normalized multi-criteria scoring. It is not an
+LLM and is never described as one. A future LLM-backed or local-Ollama
+provider can implement the same protocol behind the ``RANKING_PROVIDER``
+environment variable without changing the API contract.
 """
 
 from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic import BaseModel, Field
+from .models import CandidateRoute, ParsedPreferences, RankedRoute
+from .parsing import parse_preference
+from .ranking import rank_routes
 
 
-class CandidateRoute(BaseModel):
-    """A route produced by the Java routing engine."""
+class RankingOutcome:
+    """Provider result: interpretation + ordering."""
 
-    path: list[str] = Field(min_length=1)
-    total_distance_km: float = Field(gt=0)
-
-
-class RankedRoute(BaseModel):
-    """A candidate route with a preference score and explanation."""
-
-    path: list[str]
-    total_distance_km: float
-    score: float
-    rationale: str
+    def __init__(self, parsed: ParsedPreferences, results: list[RankedRoute]):
+        self.parsed = parsed
+        self.results = results
 
 
 class RouteRankingProvider(Protocol):
     """Ranks candidate routes against a natural-language preference."""
 
-    def rank(
-        self, preference: str, candidates: list[CandidateRoute]
-    ) -> list[RankedRoute]: ...
+    provider_id: str
+
+    def rank(self, preference: str,
+             candidates: list[CandidateRoute]) -> RankingOutcome: ...
 
 
-class MockRankingProvider:
-    """Deterministic, dependency-free ranking used until a real AI provider
-    is integrated.
+class DeterministicPreferenceRankingProvider:
+    """Local deterministic preference-ranking provider.
 
-    Strategy: shorter routes score higher; the stated preference is echoed
-    in the rationale so the full request/response contract is exercised
-    end to end without external calls.
+    Fully offline and reproducible: synonym/phrase parsing produces
+    normalized criterion weights; routes are scored by weighted
+    min-max-normalized utilities; ties break on route id.
     """
 
-    def rank(
-        self, preference: str, candidates: list[CandidateRoute]
-    ) -> list[RankedRoute]:
-        if not candidates:
-            return []
-        longest = max(c.total_distance_km for c in candidates)
-        ranked = [
-            RankedRoute(
-                path=c.path,
-                total_distance_km=c.total_distance_km,
-                score=round(1.0 - (c.total_distance_km / (longest * 1.25)), 4),
-                rationale=(
-                    f"Mock provider: ranked by distance pending AI integration "
-                    f"(preference noted: '{preference}')."
-                ),
-            )
-            for c in candidates
-        ]
-        return sorted(ranked, key=lambda r: r.score, reverse=True)
+    provider_id = "local-deterministic-v1"
+
+    def rank(self, preference: str,
+             candidates: list[CandidateRoute]) -> RankingOutcome:
+        outcome = parse_preference(preference)
+        parsed = ParsedPreferences(
+            weights=outcome.weights,
+            recognized_terms=outcome.recognized_terms,
+            unrecognized_terms=outcome.unrecognized_terms,
+            confidence=outcome.confidence,
+            note=outcome.note,
+        )
+        results = rank_routes(candidates, outcome.weights)
+        return RankingOutcome(parsed, results)
