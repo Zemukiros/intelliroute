@@ -184,6 +184,12 @@ jobs:
           echo "$R"
           echo "$R" | grep -q '"fallbackUsed":false'
           echo "$R" | grep -q '"recommendedRouteId":"route-3"'
+          # The web container starts only after the API is healthy — give
+          # next start time to boot before asserting.
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000 > /dev/null; then break; fi
+            sleep 2
+          done
           curl -sf http://localhost:3000 | grep -qi intelliroute
 
       - name: Stack logs on failure

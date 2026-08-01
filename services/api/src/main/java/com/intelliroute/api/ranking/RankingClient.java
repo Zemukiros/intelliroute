@@ -27,11 +27,22 @@ public class RankingClient {
 
     private final RestClient restClient;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public RankingClient(RankingProperties properties, RestClient.Builder builder) {
+        this(buildDefaultClient(properties, builder));
+    }
+
+    /** Test seam: inject a fully built client (e.g. bound to a mock server). */
+    RankingClient(RestClient restClient) {
+        this.restClient = restClient;
+    }
+
+    private static RestClient buildDefaultClient(RankingProperties properties,
+                                                 RestClient.Builder builder) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(properties.connectTimeoutMs());
         requestFactory.setReadTimeout(properties.readTimeoutMs());
-        this.restClient = builder
+        return builder
                 .baseUrl(properties.baseUrl())
                 .requestFactory(requestFactory)
                 .build();

@@ -37,8 +37,9 @@ class RankingClientTest {
     void setUp() {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        client = new RankingClient(
-                new RankingProperties(BASE, 500, 500), builder);
+        // Use the test seam so the mock's request factory is preserved
+        // (the production constructor installs its own timeout factory).
+        client = new RankingClient(builder.baseUrl(BASE).build());
     }
 
     @Test
