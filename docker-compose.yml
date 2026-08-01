@@ -4,7 +4,7 @@
 #   docker compose up --build
 #
 # api:        Spring Boot routing engine     -> http://localhost:8080
-# ai-service: FastAPI ranking scaffold       -> http://localhost:8090
+# ai-service: FastAPI ranking service        -> http://localhost:8090
 # web:        Next.js frontend               -> http://localhost:3000
 
 services:
@@ -14,12 +14,17 @@ services:
     ports:
       - "8080:8080"
     environment:
-      INTELLIROUTE_CORS_ALLOWED_ORIGINS: http://localhost:3000
+      # Relaxed-binding names: BASEURL -> base-url, ALLOWEDORIGINS -> allowed-origins
+      INTELLIROUTE_CORS_ALLOWEDORIGINS: http://localhost:3000
+      INTELLIROUTE_RANKING_BASEURL: http://ai-service:8090
+    depends_on:
+      - ai-service
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      # Dependency-free TCP probe (the JRE image ships no curl/wget).
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
       interval: 10s
       timeout: 3s
-      retries: 5
+      retries: 10
 
   ai-service:
     build:
@@ -27,7 +32,7 @@ services:
     ports:
       - "8090:8090"
     environment:
-      RANKING_PROVIDER: mock
+      RANKING_PROVIDER: deterministic
 
   web:
     build:

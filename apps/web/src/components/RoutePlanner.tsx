@@ -1,30 +1,43 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { ApiError, calculateRoute, fetchNetwork } from "@/lib/api";
-import type { Network, RouteResult } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ApiError, fetchNetwork, recommendRoutes } from "@/lib/api";
+import type { Network, RecommendResult } from "@/lib/types";
 import GraphView from "./GraphView";
+import RouteCard from "./RouteCard";
 
 type LoadState = "loading" | "ready" | "offline";
 
+const EXAMPLE_PREFERENCES = [
+  "Fastest route",
+  "Safest route",
+  "Avoid tolls",
+  "Prefer scenic roads",
+  "Avoid highways",
+  "Balance time, safety, and cost",
+];
+
 /**
- * Interactive route planner: pick an origin and destination, calculate the
- * shortest route via the IntelliRoute API, and inspect the result.
+ * Interactive route intelligence planner: pick origin/destination, describe
+ * a preference in plain language, and compare ranked candidate routes.
  */
 export default function RoutePlanner() {
   const [network, setNetwork] = useState<Network | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [origin, setOrigin] = useState("A");
   const [destination, setDestination] = useState("F");
-  const [result, setResult] = useState<RouteResult | null>(null);
+  const [preference, setPreference] = useState("Fastest route");
+  const [maxRoutes, setMaxRoutes] = useState(3);
+  const [result, setResult] = useState<RecommendResult | null>(null);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [calculating, setCalculating] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const loadNetwork = useCallback(async () => {
     setLoadState("loading");
     try {
-      const data = await fetchNetwork();
-      setNetwork(data);
+      setNetwork(await fetchNetwork());
       setLoadState("ready");
     } catch {
       setLoadState("offline");
@@ -35,12 +48,20 @@ export default function RoutePlanner() {
     void loadNetwork();
   }, [loadNetwork]);
 
-  const onCalculate = async () => {
-    setCalculating(true);
+  const onGenerate = async () => {
+    if (!preference.trim()) {
+      setValidationError("Describe a route preference first — or pick one of the examples.");
+      return;
+    }
+    setValidationError(null);
+    setLoading(true);
     setError(null);
     setResult(null);
+    setSelectedRouteId(null);
     try {
-      setResult(await calculateRoute(origin, destination));
+      const data = await recommendRoutes(origin, destination, preference.trim(), maxRoutes);
+      setResult(data);
+      setSelectedRouteId(data.recommendedRouteId);
     } catch (e) {
       if (e instanceof ApiError && e.problem) {
         setError(`${e.problem.error}: ${e.problem.message}`);
@@ -48,9 +69,35 @@ export default function RoutePlanner() {
         setError("Could not reach the IntelliRoute API. Is the backend running on port 8080?");
       }
     } finally {
-      setCalculating(false);
+      setLoading(false);
     }
   };
+
+  const shortestRouteId = useMemo(() => {
+    if (!result || result.candidates.length === 0) return null;
+    return result.candidates.reduce((best, c) =>
+      c.totalDistanceKm < best.totalDistanceKm ? c : best,
+    ).routeId;
+  }, [result]);
+
+  const selectedPath = useMemo(() => {
+    if (!result || !selectedRouteId) return [];
+    return result.candidates.find((c) => c.routeId === selectedRouteId)?.path ?? [];
+  }, [result, selectedRouteId]);
+
+  const rankedById = useMemo(
+    () => new Map((result?.rankedRoutes ?? []).map((r) => [r.routeId, r])),
+    [result],
+  );
+
+  const orderedCandidates = useMemo(() => {
+    if (!result) return [];
+    return [...result.candidates].sort((a, b) => {
+      const ra = rankedById.get(a.routeId)?.rank ?? 99;
+      const rb = rankedById.get(b.routeId)?.rank ?? 99;
+      return ra - rb;
+    });
+  }, [result, rankedById]);
 
   if (loadState === "loading") {
     return (
@@ -66,9 +113,7 @@ export default function RoutePlanner() {
         <h2 className="font-semibold text-amber-300">API not reachable</h2>
         <p className="mt-2 text-sm text-amber-100/80">
           The IntelliRoute API is not responding. Start it with{" "}
-          <code className="rounded bg-black/40 px-1.5 py-0.5">
-            mvn spring-boot:run
-          </code>{" "}
+          <code className="rounded bg-black/40 px-1.5 py-0.5">mvn spring-boot:run</code>{" "}
           in <code className="rounded bg-black/40 px-1.5 py-0.5">services/api</code>, then retry.
         </p>
         <button
@@ -82,53 +127,104 @@ export default function RoutePlanner() {
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
+    <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
       {/* Control panel */}
       <div className="space-y-5 rounded-xl border border-slate-800 bg-panel p-6">
-        <div>
-          <label htmlFor="origin" className="mb-1.5 block text-sm font-medium text-slate-300">
-            Origin
-          </label>
-          <select
-            id="origin"
-            value={origin}
-            onChange={(e) => setOrigin(e.target.value)}
-            className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-2 text-slate-100 focus:border-accent focus:outline-none"
-          >
-            {network.nodes.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.id} — {n.name}
-              </option>
-            ))}
-          </select>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="origin" className="mb-1.5 block text-sm font-medium text-slate-300">
+              Origin
+            </label>
+            <select
+              id="origin"
+              value={origin}
+              onChange={(e) => setOrigin(e.target.value)}
+              className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-2 text-slate-100 focus:border-accent focus:outline-none"
+            >
+              {network.nodes.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.id} — {n.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="destination" className="mb-1.5 block text-sm font-medium text-slate-300">
+              Destination
+            </label>
+            <select
+              id="destination"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+              className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-2 text-slate-100 focus:border-accent focus:outline-none"
+            >
+              {network.nodes.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.id} — {n.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div>
-          <label htmlFor="destination" className="mb-1.5 block text-sm font-medium text-slate-300">
-            Destination
+          <label htmlFor="preference" className="mb-1.5 block text-sm font-medium text-slate-300">
+            Route preference (plain language)
+          </label>
+          <textarea
+            id="preference"
+            value={preference}
+            onChange={(e) => setPreference(e.target.value)}
+            rows={2}
+            maxLength={500}
+            placeholder='e.g. "Choose the safest route and avoid tolls"'
+            className="w-full resize-none rounded-lg border border-slate-700 bg-surface px-3 py-2 text-slate-100 placeholder:text-slate-600 focus:border-accent focus:outline-none"
+          />
+          <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Example preferences">
+            {EXAMPLE_PREFERENCES.map((example) => (
+              <button
+                key={example}
+                type="button"
+                onClick={() => setPreference(example)}
+                className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-300 transition hover:border-accent hover:text-accent"
+              >
+                {example}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="maxRoutes" className="mb-1.5 block text-sm font-medium text-slate-300">
+            Maximum routes
           </label>
           <select
-            id="destination"
-            value={destination}
-            onChange={(e) => setDestination(e.target.value)}
+            id="maxRoutes"
+            value={maxRoutes}
+            onChange={(e) => setMaxRoutes(Number(e.target.value))}
             className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-2 text-slate-100 focus:border-accent focus:outline-none"
           >
-            {network.nodes.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.id} — {n.name}
+            {[1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>
+                {n}
               </option>
             ))}
           </select>
         </div>
 
         <button
-          onClick={() => void onCalculate()}
-          disabled={calculating}
+          onClick={() => void onGenerate()}
+          disabled={loading}
           className="w-full rounded-lg bg-accent-strong px-4 py-2.5 font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {calculating ? "Calculating…" : "Calculate Route"}
+          {loading ? "Generating routes…" : "Generate Routes"}
         </button>
 
+        {validationError && (
+          <p role="alert" className="rounded-lg border border-amber-800/60 bg-amber-950/40 p-3 text-sm text-amber-200">
+            {validationError}
+          </p>
+        )}
         {error && (
           <p role="alert" className="rounded-lg border border-red-800/60 bg-red-950/40 p-3 text-sm text-red-200">
             {error}
@@ -136,49 +232,66 @@ export default function RoutePlanner() {
         )}
 
         {result && (
-          <dl className="space-y-3 border-t border-slate-800 pt-4 text-sm">
-            <div>
-              <dt className="text-slate-400">Shortest path</dt>
-              <dd className="mt-1 font-mono text-base text-accent">
-                {result.path.join(" → ")}
-              </dd>
-            </div>
-            <div className="grid grid-cols-3 gap-3 text-center">
-              <div className="rounded-lg bg-surface p-3">
-                <dt className="text-xs text-slate-400">Distance</dt>
-                <dd className="mt-1 font-semibold text-slate-100">
-                  {result.totalDistance} km
-                </dd>
-              </div>
-              <div className="rounded-lg bg-surface p-3">
-                <dt className="text-xs text-slate-400">Visited</dt>
-                <dd className="mt-1 font-semibold text-slate-100">
-                  {result.visitedNodes} nodes
-                </dd>
-              </div>
-              <div className="rounded-lg bg-surface p-3">
-                <dt className="text-xs text-slate-400">Engine time</dt>
-                <dd className="mt-1 font-semibold text-slate-100">
-                  {result.executionTimeMs} ms
-                </dd>
-              </div>
-            </div>
-          </dl>
+          <div className="space-y-2 border-t border-slate-800 pt-4 text-xs text-slate-400">
+            {result.fallbackUsed && (
+              <p
+                role="status"
+                className="rounded-lg border border-amber-800/60 bg-amber-950/40 p-3 text-amber-200"
+              >
+                Ranking service offline — routes are ordered by distance and
+                your preference was not interpreted.
+              </p>
+            )}
+            {!result.fallbackUsed && (
+              <p>
+                Interpreted as{" "}
+                <span className="text-slate-200">
+                  {Object.entries(result.parsedPreferences.weights)
+                    .map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`)
+                    .join(", ")}
+                </span>{" "}
+                (confidence {(result.parsedPreferences.confidence * 100).toFixed(0)}%)
+              </p>
+            )}
+            <p>
+              Provider: <span className="text-slate-200">{result.provider}</span> · routing{" "}
+              {result.routingTimeMs} ms · ranking {result.rankingTimeMs} ms
+            </p>
+          </div>
         )}
       </div>
 
-      {/* Graph visualization */}
-      <div>
+      {/* Graph + comparison */}
+      <div className="space-y-4">
         <GraphView
           network={network}
-          activePath={result?.path ?? []}
+          activePath={selectedPath}
           origin={origin}
           destination={destination}
         />
-        <p className="mt-3 text-xs text-slate-500">
-          Sample road network — distances in kilometres. Juniper Isle (J) is
-          intentionally disconnected to demonstrate unreachable-route handling.
-        </p>
+
+        {!result && !loading && (
+          <p className="rounded-xl border border-dashed border-slate-800 p-4 text-sm text-slate-500">
+            Describe a preference and generate routes to compare candidates
+            side by side. The dashed grey road is closed for construction.
+          </p>
+        )}
+
+        {result && (
+          <div className="space-y-3" aria-label="Route comparison">
+            {orderedCandidates.map((candidate) => (
+              <RouteCard
+                key={candidate.routeId}
+                candidate={candidate}
+                ranked={rankedById.get(candidate.routeId)}
+                isRecommended={candidate.routeId === result.recommendedRouteId}
+                isShortest={candidate.routeId === shortestRouteId}
+                isSelected={candidate.routeId === selectedRouteId}
+                onSelect={setSelectedRouteId}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

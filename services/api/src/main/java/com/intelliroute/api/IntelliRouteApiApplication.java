@@ -2,6 +2,7 @@ package com.intelliroute.api;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /**
  * IntelliRoute API — graph-based route intelligence engine.
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * re-ranking (see services/ai-service).
  */
 @SpringBootApplication
+@ConfigurationPropertiesScan
 public class IntelliRouteApiApplication {
 
     public static void main(String[] args) {

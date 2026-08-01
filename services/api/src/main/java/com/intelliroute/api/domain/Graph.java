@@ -47,6 +47,19 @@ public final class Graph {
         return adjacency.getOrDefault(nodeId, List.of());
     }
 
+    /**
+     * The directed edge from {@code from} to {@code to}.
+     *
+     * @throws IllegalArgumentException when no such edge exists
+     */
+    public Edge edgeBetween(String from, String to) {
+        return edgesFrom(from).stream()
+                .filter(e -> e.to().equals(to))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "No edge between '" + from + "' and '" + to + "'"));
+    }
+
     /** All edges of the graph in insertion order. */
     public List<Edge> edges() {
         return adjacency.values().stream().flatMap(List::stream).toList();
@@ -77,19 +90,28 @@ public final class Graph {
             return this;
         }
 
-        /** Adds a one-way road segment. Both endpoints must already exist. */
+        /** Adds a one-way plain local road. Both endpoints must already exist. */
         public Builder addEdge(String from, String to, double distanceKm) {
-            requireNode(from);
-            requireNode(to);
-            adjacency.computeIfAbsent(from, k -> new ArrayList<>())
-                    .add(new Edge(from, to, distanceKm));
+            return addRoad(Edge.local(from, to, distanceKm));
+        }
+
+        /** Adds a two-way plain local road: one directed edge in each direction. */
+        public Builder addBidirectionalEdge(String a, String b, double distanceKm) {
+            return addEdge(a, b, distanceKm).addEdge(b, a, distanceKm);
+        }
+
+        /** Adds a one-way road with full metadata. Both endpoints must already exist. */
+        public Builder addRoad(Edge edge) {
+            requireNode(edge.from());
+            requireNode(edge.to());
+            adjacency.computeIfAbsent(edge.from(), k -> new ArrayList<>()).add(edge);
             edgeCount++;
             return this;
         }
 
-        /** Adds a two-way road: one directed edge in each direction. */
-        public Builder addBidirectionalEdge(String a, String b, double distanceKm) {
-            return addEdge(a, b, distanceKm).addEdge(b, a, distanceKm);
+        /** Adds a two-way road with full metadata (mirrored in both directions). */
+        public Builder addBidirectionalRoad(Edge edge) {
+            return addRoad(edge).addRoad(edge.reversed());
         }
 
         private void requireNode(String id) {

@@ -1,4 +1,9 @@
-import type { ApiProblem, Network, RouteResult } from "./types";
+import type {
+  ApiProblem,
+  Network,
+  RecommendResult,
+  RouteResult,
+} from "./types";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
@@ -48,4 +53,21 @@ export async function calculateRoute(
     return parseProblem(response);
   }
   return (await response.json()) as RouteResult;
+}
+
+export async function recommendRoutes(
+  origin: string,
+  destination: string,
+  preference: string,
+  maximumRoutes: number,
+): Promise<RecommendResult> {
+  const response = await fetch(`${API_BASE}/api/routes/recommend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ origin, destination, preference, maximumRoutes }),
+  });
+  if (!response.ok) {
+    return parseProblem(response);
+  }
+  return (await response.json()) as RecommendResult;
 }

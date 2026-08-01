@@ -23,6 +23,9 @@ import org.springframework.stereotype.Component;
  *       O((V + E) log V) time and O(V) space.</li>
  *   <li>Terminates early as soon as the destination is settled — the
  *       remaining frontier cannot improve on a settled node's distance.</li>
+ *   <li>Closed roads ({@code edge.open() == false}) are never traversed.</li>
+ *   <li>Supports excluding specific nodes and directed edges, which is the
+ *       primitive Yen's k-shortest-paths algorithm builds on.</li>
  *   <li>Stateless and therefore thread-safe; one instance serves all
  *       concurrent requests.</li>
  * </ul>
@@ -32,17 +35,29 @@ public class DijkstraPathFinder {
 
     private record QueueEntry(String nodeId, double distance) {}
 
+    /** Directed-edge exclusion key. */
+    public static String edgeKey(String from, String to) {
+        return from + ">" + to;
+    }
+
     /**
      * Computes the shortest path between two nodes.
      *
-     * @param graph       the road network
-     * @param originId    id of the start node (must exist in the graph)
-     * @param destinationId id of the target node (must exist in the graph)
-     * @return the shortest path, or {@link PathResult#unreachable(int)}
-     *         when no path exists
      * @throws IllegalArgumentException when either node is not in the graph
      */
     public PathResult findShortestPath(Graph graph, String originId, String destinationId) {
+        return findShortestPath(graph, originId, destinationId, Set.of(), Set.of());
+    }
+
+    /**
+     * Computes the shortest path while treating the given nodes and directed
+     * edges (keys from {@link #edgeKey}) as removed from the graph.
+     *
+     * @return the shortest path, or {@link PathResult#unreachable(int)}
+     *         when no path exists under the given exclusions
+     */
+    public PathResult findShortestPath(Graph graph, String originId, String destinationId,
+                                       Set<String> excludedNodes, Set<String> excludedEdges) {
         requireNode(graph, originId, "origin");
         requireNode(graph, destinationId, "destination");
 
@@ -73,7 +88,10 @@ public class DijkstraPathFinder {
             }
 
             for (Edge edge : graph.edgesFrom(current.nodeId())) {
-                if (settled.contains(edge.to())) {
+                if (!edge.open()
+                        || settled.contains(edge.to())
+                        || excludedNodes.contains(edge.to())
+                        || excludedEdges.contains(edgeKey(edge.from(), edge.to()))) {
                     continue;
                 }
                 double candidate = distances.get(current.nodeId()) + edge.distanceKm();

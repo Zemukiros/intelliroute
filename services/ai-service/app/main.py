@@ -1,7 +1,7 @@
-"""IntelliRoute AI service — FastAPI application.
+"""IntelliRoute ranking service — FastAPI application.
 
-Step 1 scaffold: exposes /health and /rank backed by the mock provider.
-No paid AI APIs are called.
+Exposes the local deterministic preference-ranking provider. No paid AI
+APIs are called anywhere in this service.
 """
 
 from __future__ import annotations
@@ -9,46 +9,41 @@ from __future__ import annotations
 import os
 
 from fastapi import FastAPI
-from pydantic import BaseModel, Field
 
-from .providers import CandidateRoute, MockRankingProvider, RankedRoute
+from .models import RankRequest, RankResponse
+from .providers import DeterministicPreferenceRankingProvider, RouteRankingProvider
 
 app = FastAPI(
-    title="IntelliRoute AI Service",
-    version="0.1.0",
-    description="Re-ranks candidate routes against natural-language preferences.",
+    title="IntelliRoute Ranking Service",
+    version="0.2.0",
+    description="Ranks candidate routes against natural-language preferences"
+                " using a local deterministic provider.",
 )
 
 
-def _select_provider() -> MockRankingProvider:
-    provider_name = os.getenv("RANKING_PROVIDER", "mock")
-    # Only the mock provider exists in Step 1; future providers register here.
-    if provider_name != "mock":
-        raise RuntimeError(f"Unknown RANKING_PROVIDER: {provider_name}")
-    return MockRankingProvider()
+def _select_provider() -> RouteRankingProvider:
+    provider_name = os.getenv("RANKING_PROVIDER", "deterministic")
+    if provider_name in {"deterministic", "mock"}:
+        # "mock" retained as an alias for backwards compatibility with Step 1.
+        return DeterministicPreferenceRankingProvider()
+    raise RuntimeError(f"Unknown RANKING_PROVIDER: {provider_name}")
 
 
 provider = _select_provider()
 
 
-class RankRequest(BaseModel):
-    preference: str = Field(min_length=1, max_length=500)
-    candidates: list[CandidateRoute]
-
-
-class RankResponse(BaseModel):
-    provider: str
-    results: list[RankedRoute]
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "provider": type(provider).__name__}
+    return {"status": "ok", "provider": provider.provider_id}
 
 
 @app.post("/rank", response_model=RankResponse)
 def rank(request: RankRequest) -> RankResponse:
+    outcome = provider.rank(request.preference, request.candidates)
     return RankResponse(
-        provider=type(provider).__name__,
-        results=provider.rank(request.preference, request.candidates),
+        provider=provider.provider_id,
+        parsed_preferences=outcome.parsed,
+        results=outcome.results,
+        recommended_route_id=(outcome.results[0].route_id
+                              if outcome.results else None),
     )

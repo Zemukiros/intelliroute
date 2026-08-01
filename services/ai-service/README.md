@@ -1,27 +1,43 @@
-# IntelliRoute AI Service (scaffold)
+# IntelliRoute Ranking Service
 
-FastAPI service that will re-rank candidate routes against natural-language
-preferences ("avoid highways", "prefer the safest route", …).
+FastAPI service that ranks candidate routes against natural-language
+preferences ("choose the safest route and avoid tolls").
 
-**Status: architectural scaffold.** In Step 1 the service exposes a health
-endpoint and a documented mock re-ranking provider so the platform's service
-boundary exists without incurring any AI-API costs. No paid providers are
-called anywhere in this codebase.
+**Provider: `local-deterministic-v1`** — a local deterministic
+preference-ranking provider: phrase/synonym parsing → normalized criterion
+weights → min-max utility scoring → per-route explanations, with
+confidence reporting and safe fallbacks for unclear input. It is **not an
+LLM**; it is fully offline, reproducible, and free. The
+`RouteRankingProvider` protocol keeps an LLM or local-Ollama provider as a
+future drop-in behind the `RANKING_PROVIDER` environment variable
+(cost-gated).
 
-## Design
+Parsing and scoring rules, wire contract, and layer comparison:
+[../../docs/ROUTE_RANKING.md](../../docs/ROUTE_RANKING.md)
 
-- `app/main.py` — FastAPI application and routes
-- `app/providers.py` — `RouteRankingProvider` protocol plus `MockRankingProvider`.
-  A real LLM-backed provider will implement the same protocol in a later
-  milestone, selected via the `RANKING_PROVIDER` environment variable.
+## Layout
+
+- `app/models.py` — pydantic models (camelCase wire format shared with the Java API)
+- `app/parsing.py` — preference parsing (phrases, synonyms, combinations, fallbacks)
+- `app/ranking.py` — normalized multi-criteria scoring + explanations
+- `app/providers.py` — provider protocol + deterministic provider
+- `app/main.py` — FastAPI app (`GET /health`, `POST /rank`)
+- `tests/` — 54 pytest tests
+- `scripts/benchmark_ranking.py` — reproducible benchmark (seed 42)
 
 ## Run locally
 
 ```bash
 cd services/ai-service
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app.main:app --port 8090 --reload
+uvicorn app.main:app --port 8090
 ```
 
-Then: `curl http://localhost:8090/health`
+## Test & benchmark
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q
+python scripts/benchmark_ranking.py
+```

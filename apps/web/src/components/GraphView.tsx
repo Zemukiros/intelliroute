@@ -13,8 +13,8 @@ interface GraphViewProps {
 /**
  * Lightweight SVG rendering of the road network.
  *
- * Uses the abstract layout coordinates served by the API; edges on the
- * active route are highlighted. No external map or chart library needed.
+ * Closed roads render as dashed grey lines; edges on the active route are
+ * highlighted. No external map or chart library needed.
  */
 export default function GraphView({
   network,
@@ -31,8 +31,7 @@ export default function GraphView({
   }
   const pathNodes = new Set(activePath);
 
-  const edgeKey = (from: string, to: string) =>
-    [from, to].sort().join("-");
+  const edgeKey = (from: string, to: string) => [from, to].sort().join("-");
 
   return (
     <svg
@@ -46,28 +45,29 @@ export default function GraphView({
         const from = nodeById.get(edge.from);
         const to = nodeById.get(edge.to);
         if (!from || !to) return null;
-        const onPath = pathEdges.has(edgeKey(edge.from, edge.to));
+        const onPath = edge.open && pathEdges.has(edgeKey(edge.from, edge.to));
         const midX = (from.x + to.x) / 2;
         const midY = (from.y + to.y) / 2;
         return (
-          <g key={`${edge.from}-${edge.to}`}>
+          <g key={`${edge.from}-${edge.to}`} data-testid={`edge-${edge.from}-${edge.to}`}>
             <line
               x1={from.x}
               y1={from.y}
               x2={to.x}
               y2={to.y}
-              stroke={onPath ? "#38bdf8" : "#334155"}
+              stroke={onPath ? "#38bdf8" : edge.open ? "#334155" : "#3f3f46"}
               strokeWidth={onPath ? 3.5 : 1.5}
               strokeLinecap="round"
+              strokeDasharray={edge.open ? undefined : "6 5"}
             />
             <text
               x={midX}
               y={midY - 6}
               textAnchor="middle"
               fontSize="11"
-              fill={onPath ? "#7dd3fc" : "#64748b"}
+              fill={onPath ? "#7dd3fc" : edge.open ? "#64748b" : "#52525b"}
             >
-              {edge.distanceKm} km
+              {edge.open ? `${edge.distanceKm} km` : "closed"}
             </text>
           </g>
         );
