@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: API — build, test & smoke test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build and run tests
+        run: mvn -B verify
+
+      - name: Publish test summary
+        if: always()
+        run: |
+          echo "### JUnit results" >> "$GITHUB_STEP_SUMMARY"
+          grep -h "Tests run" target/surefire-reports/*.txt >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: API smoke test (boot + live request)
+        run: |
+          java -jar target/intelliroute-api-*.jar &
+          APP_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/actuator/health > /dev/null; then break; fi
+            sleep 2
+          done
+          echo "--- calculate A -> F"
+          RESPONSE=$(curl -sf -X POST http://localhost:8080/api/routes/calculate \
+            -H "Content-Type: application/json" \
+            -d '{"origin": "A", "destination": "F"}')
+          echo "$RESPONSE"
+          echo "$RESPONSE" | grep -q '"totalDistance":14.0' || (echo "Unexpected route result" && exit 1)
+          echo "--- unreachable A -> J (expect 422)"
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/api/routes/calculate \
+            -H "Content-Type: application/json" \
+            -d '{"origin": "A", "destination": "J"}')
+          test "$CODE" = "422" || (echo "Expected 422, got $CODE" && exit 1)
+          kill $APP_PID
+
+  frontend:
+    name: Web — lint & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  ai-service:
+    name: AI service — import & sanity check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ai-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Import and provider sanity check
+        run: |
+          python - <<'EOF'
+          from app.main import app
+          from app.providers import CandidateRoute, MockRankingProvider
+
+          provider = MockRankingProvider()
+          ranked = provider.rank(
+              "avoid highways",
+              [
+                  CandidateRoute(path=["A", "C", "D", "F"], total_distance_km=14),
+                  CandidateRoute(path=["A", "B", "D", "F"], total_distance_km=17),
+              ],
+          )
+          assert ranked[0].total_distance_km == 14, "shorter route must rank first"
+          print("AI service scaffold OK:", app.title)
+          EOF

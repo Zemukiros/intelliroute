@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: intelliroute-api
+
+server:
+  port: 8080
+
+intelliroute:
+  cors:
+    # Comma-separated list; override in production deployments.
+    allowed-origins: http://localhost:3000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
