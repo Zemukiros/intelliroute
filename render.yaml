@@ -1,0 +1,47 @@
+# Render Blueprint — deploys IntelliRoute's two backend services on the
+# free tier. The Next.js frontend (apps/web) deploys separately on Vercel.
+#
+# Free-tier notes:
+# - Services sleep after ~15 min idle; the first request wakes them (~30-60s).
+# - The API degrades gracefully to java-local-fallback while the ranker wakes.
+#
+# After the first deploy, two dashboard edits are required (see DEPLOYMENT.md):
+# 1. intelliroute-api > INTELLIROUTE_RANKING_BASEURL -> the ranker's real URL
+# 2. intelliroute-api > INTELLIROUTE_CORS_ALLOWEDORIGINS -> the Vercel URL(s)
+
+services:
+  - type: web
+    name: intelliroute-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/api/Dockerfile
+    dockerContext: ./services/api
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: PORT
+        value: "8080"
+      # Replace with the intelliroute-ai service's public URL after deploy:
+      - key: INTELLIROUTE_RANKING_BASEURL
+        value: https://REPLACE-WITH-INTELLIROUTE-AI-URL.onrender.com
+      # Replace with your Vercel frontend URL(s), comma-separated:
+      - key: INTELLIROUTE_CORS_ALLOWEDORIGINS
+        value: http://localhost:3000
+      # Headroom for free-tier wake latency before falling back:
+      - key: INTELLIROUTE_RANKING_CONNECTTIMEOUTMS
+        value: "3000"
+      - key: INTELLIROUTE_RANKING_READTIMEOUTMS
+        value: "5000"
+
+  - type: web
+    name: intelliroute-ai
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/ai-service/Dockerfile
+    dockerContext: ./services/ai-service
+    envVars:
+      - key: PORT
+        value: "8090"
+      - key: RANKING_PROVIDER
+        value: deterministic
