@@ -109,3 +109,9 @@ Changing any route/ranking field means touching all three sides at once:
   capability anywhere in the docs.
 - No cloud resources are provisioned from this repo; deployment (Render blueprint in
   `render.yaml`, Vercel for the frontend) is documented in `DEPLOYMENT.md` and free-tier only.
+
+## Workflow
+Plans and research live in docs/plans/. When asked to implement a plan,
+read the relevant file in docs/plans/ first and follow it. Ask before
+deviating from a plan in a major way. After finishing a significant
+feature, update this file if the project structure changed.
