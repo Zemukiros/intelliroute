@@ -7,6 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 IntelliRoute is a three-service monorepo: a Java routing engine, a Python preference-ranking
 service, and a Next.js frontend. Milestone 2 of four is complete (multi-route generation +
 preference ranking); milestone 3 is PostgreSQL persistence and A*. See `docs/ROADMAP.md`.
+The current build is already deployed on free tiers (web on Vercel, api + ai-service on Render)
+ahead of the rest of milestone 4 — see `DEPLOYMENT.md`.
 
 ## Commands
 

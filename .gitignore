@@ -40,3 +40,6 @@ Thumbs.db
 *.log
 .cache/
 coverage/
+
+# Private Claude Code notes
+CLAUDE.local.md
